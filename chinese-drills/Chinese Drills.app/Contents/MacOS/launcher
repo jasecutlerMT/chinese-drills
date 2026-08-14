@@ -1,0 +1,230 @@
+#!/bin/bash
+# Chinese Drills — Dock/Desktop launcher.
+#
+# Starts the local server and opens the browser, the same as
+# "Start Chinese Drills.command" but with an icon and no Terminal window.
+# Because there is no visible window, anything that goes wrong has to be
+# said in a dialog and written to launch-log.txt rather than printed.
+#
+# The whole body lives inside main() and is called on the last line. The
+# in-app updater can overwrite this very file while bash is reading it, and
+# bash reads scripts incrementally — a partial read of a flat script would
+# execute half a command. Wrapped like this, bash must reach the final line
+# before anything runs at all.
+
+main() {
+  say() {
+    osascript -e "display alert \"Chinese Drills\" message \"$1\"" >/dev/null 2>&1
+  }
+  # Non-blocking: a dialog here would stop the launch until it was clicked,
+  # which turns "tell me what you're doing" into "ask my permission".
+  notify() {
+    osascript -e "display notification \"$1\" with title \"Chinese Drills\"" >/dev/null 2>&1
+  }
+
+  # macOS runs a quarantined app from a randomised read-only copy under
+  # AppTranslocation, where the bundle sits alone and cannot see the folder
+  # holding the app's files. Only a manually downloaded copy is quarantined —
+  # the in-app updater's download is not — so the fix is a one-time gesture.
+  case "$0" in
+    */AppTranslocation/*)
+      say "macOS is running this app from a temporary copy, so it cannot find its files.
+
+To fix it once: close this, right-click 'Chinese Drills' and choose Open, then click Open in the dialog. After that, double-clicking works normally."
+      exit 1
+      ;;
+  esac
+
+  # Contents/MacOS/launcher -> the chinese-drills folder holding the app.
+  cd "$(dirname "$0")/../../.." 2>/dev/null || {
+    say "I could not find the app's folder."
+    exit 1
+  }
+
+  if [ ! -f package.json ]; then
+    say "'Chinese Drills' has been moved out of its folder, so it can no longer find the app.
+
+Put it back next to 'Start Chinese Drills.command'. To keep it on the Desktop or in the Dock, make a shortcut instead: hold Option and Command while dragging the app — that leaves the original where it belongs."
+    exit 1
+  fi
+
+  LOG="launch-log.txt"
+  # Fresh log per launch: an old failure still sitting in the file would send
+  # the next person reading it down the wrong path.
+  : > "$LOG" 2>/dev/null
+  echo "Chinese Drills — launched $(date)" >> "$LOG" 2>&1
+
+  # ---------- environment ----------
+
+  # Finder starts an app through launchd, which sources no shell profile at
+  # all: PATH arrives as bare /usr/bin:/bin:/usr/sbin:/sbin. Everything the
+  # user's Terminal adds is invisible — nvm, an npm global prefix, wherever
+  # `claude` was installed. So ask their login shell what PATH it actually
+  # uses, and run with that. The .command has always had this for free by
+  # virtue of running inside Terminal; this is how the app catches up.
+  adopt_login_path() {
+    local shell tmp pid watchdog line
+    shell="$(dscl . -read "$HOME" UserShell 2>/dev/null | awk '{print $2}')"
+    [ -x "$shell" ] || shell="${SHELL:-}"
+    [ -x "$shell" ] || shell="/bin/zsh"
+    [ -x "$shell" ] || { echo "[path] no login shell found; keeping current PATH" >> "$LOG"; return 0; }
+
+    # Explicit template rather than `mktemp -t prefix`: the bare-prefix form is
+    # BSD-only, so it works here and fails everywhere else, which is precisely
+    # the kind of difference that hides until someone else runs it.
+    tmp="$(mktemp "${TMPDIR:-/tmp}/drillspath.XXXXXX" 2>/dev/null)" ||
+      { echo "[path] could not create a temp file; keeping current PATH" >> "$LOG"; return 0; }
+
+    # -l runs .zprofile, -i runs .zshrc — nvm is normally set up in the
+    # latter, so neither flag alone is enough. A profile that blocks must not
+    # hang the app forever and macOS ships bash 3.2, which has no `timeout`,
+    # so supervise it with a plain background watchdog.
+    "$shell" -l -i -c 'printf "\n__DRILLS_PATH__%s\n" "$PATH"' </dev/null >"$tmp" 2>/dev/null &
+    pid=$!
+    ( sleep 10; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$pid" 2>/dev/null
+    kill -9 "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+
+    # Profiles print banners and version notices, so look for the sentinel
+    # rather than trusting whatever happens to be the last line.
+    line="$(grep -a '^__DRILLS_PATH__' "$tmp" 2>/dev/null | tail -1)"
+    rm -f "$tmp" 2>/dev/null
+    line="${line#__DRILLS_PATH__}"
+    if [ -n "$line" ]; then
+      export PATH="$line"
+      echo "[path] adopted PATH from $shell" >> "$LOG"
+    else
+      echo "[path] $shell returned no PATH; keeping current PATH" >> "$LOG"
+    fi
+    return 0
+  }
+
+  # Appended, never prepended. Prepending is exactly what broke this: an Intel
+  # Node left in /usr/local/bin outranked the user's real one, and the compiled
+  # database module — built by the real one — then refused to load into it.
+  # These are a safety net for a machine with no shell PATH worth reading, not
+  # a preference over the user's own tools.
+  append_path() {
+    case ":$PATH:" in
+      *":$1:"*) ;;
+      *) [ -d "$1" ] && export PATH="$PATH:$1" ;;
+    esac
+  }
+
+  adopt_login_path
+  append_path "/opt/homebrew/bin"
+  append_path "/usr/local/bin"
+
+  # Whatever goes wrong next, this turns "it's broken" into a diagnosis.
+  {
+    if command -v node >/dev/null 2>&1; then
+      echo "node:   $(command -v node)  $(node -v 2>/dev/null)  $(node -p process.arch 2>/dev/null)"
+    else
+      echo "node:   NOT FOUND"
+    fi
+    echo "npm:    $(command -v npm 2>/dev/null || echo 'NOT FOUND')"
+    echo "claude: $(command -v claude 2>/dev/null || echo 'NOT FOUND')"
+    echo "PATH:   $PATH"
+    echo "---"
+  } >> "$LOG" 2>&1
+
+  if ! command -v npm >/dev/null 2>&1; then
+    say "Node.js isn't installed — the app needs it to run.
+
+Download the LTS installer from nodejs.org, run it, then open Chinese Drills again."
+    exit 1
+  fi
+
+  # ---------- components ----------
+
+  # `next` is plain JavaScript and resolves even when the app cannot possibly
+  # start, so checking it proves very little. better-sqlite3 needs opening, not
+  # merely requiring: the package loads its compiled binary lazily, so
+  # `require` alone succeeds against a build that cannot run here. Constructing
+  # a throwaway in-memory database is what actually pulls the binary in, and
+  # that is the step that fails when the Node running it differs in version or
+  # architecture from the one that built it.
+  deps_ok() {
+    [ -d node_modules ] &&
+      node -e "require.resolve('next'); new (require('better-sqlite3'))(':memory:').close()" \
+        >/dev/null 2>&1
+  }
+
+  # Fix it rather than report it: the mismatch is never something the person
+  # using the app chose, and every rung here is safe to run on a healthy tree.
+  ensure_deps() {
+    if [ ! -d node_modules ]; then
+      notify "Setting up — this takes about a minute."
+      echo "[setup] first run: installing components" >> "$LOG"
+    else
+      notify "Repairing a component — this takes about a minute."
+      echo "[repair] components did not load; repairing" >> "$LOG"
+    fi
+
+    echo "[deps] npm install" >> "$LOG"
+    npm install --no-audit --no-fund >> "$LOG" 2>&1
+    if deps_ok; then echo "[deps] ok after npm install" >> "$LOG"; return 0; fi
+
+    # A stale build for the wrong architecture survives a plain install,
+    # because the package is already present and the lockfile is satisfied.
+    # Removing it forces npm to fetch the prebuild matching THIS Node.
+    echo "[deps] refetching better-sqlite3" >> "$LOG"
+    rm -rf node_modules/better-sqlite3
+    npm install --no-audit --no-fund >> "$LOG" 2>&1
+    if deps_ok; then echo "[deps] ok after refetching better-sqlite3" >> "$LOG"; return 0; fi
+
+    # No prebuild for this combination; compile one. Needs Xcode command line
+    # tools, which is why it is last rather than first.
+    echo "[deps] rebuilding better-sqlite3 from source" >> "$LOG"
+    npm rebuild better-sqlite3 --build-from-source >> "$LOG" 2>&1
+    if deps_ok; then echo "[deps] ok after rebuild from source" >> "$LOG"; return 0; fi
+
+    echo "[deps] FAILED" >> "$LOG"
+    say "The app could not repair one of its components.
+
+Every repair here downloads from the internet, so check you're online and open Chinese Drills again.
+
+If it still fails, open launch-log.txt — it's in the same folder as the app — and send it to me. It says exactly what went wrong."
+    return 1
+  }
+
+  deps_ok || ensure_deps || exit 1
+
+  # ---------- run ----------
+
+  # Open the browser once the server actually answers.
+  (
+    tries=0
+    until curl -s http://localhost:3000 >/dev/null 2>&1; do
+      sleep 1
+      tries=$((tries + 1))
+      [ "$tries" -ge 180 ] && exit 1
+    done
+    open "http://localhost:3000"
+  ) &
+
+  # Run the server; loop when an in-app update asks for a restart.
+  while :; do
+    rm -f .restart
+    npm run dev >> "$LOG" 2>&1
+    status=$?
+    if [ -f .restart ]; then
+      echo "Update installed — restarting…" >> "$LOG"
+      continue
+    fi
+    break
+  done
+
+  # Quitting from inside the app stops the server deliberately and exits 0;
+  # anything else is a crash worth telling someone about. With no Terminal
+  # window there is nothing to read otherwise — it would just vanish.
+  if [ "$status" -ne 0 ]; then
+    say "The app has stopped unexpectedly.
+
+What happened is written in launch-log.txt, in the same folder as the app."
+  fi
+}
+
+main "$@"

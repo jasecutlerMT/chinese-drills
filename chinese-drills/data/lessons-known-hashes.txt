@@ -1,0 +1,14 @@
+# sha256 of every data/lessons.json this project has released, oldest first.
+#
+# The updater uses this to tell "still exactly as shipped" from "the user has
+# corrected it". A file whose hash is listed here is safe to replace with newer
+# textbook data; anything else is someone's own work and is left alone.
+#
+# scripts/publish-release.sh appends the new hash on every release. Never remove
+# a line: dropping one makes the updater treat that old release's pristine file
+# as hand-edited and stop refreshing it — which is exactly what an install that
+# skipped several versions would then be stuck on.
+01c33a0b6820e82f2fb32966d57753f68e6f90aea954f1bcecb0397ed5051137
+8d05a65feca95ec31064813242d98d158a266d8212abb0c158c59c8b9d46fd90
+59c9add5dff0d362e3d8f9f7350d7945850d6a00c6c7a01b8ea6b95a114a8a3d
+5518d639164a4733d1bc812d9186306bf15591e56fe205788c51a1c1ddd94aa1

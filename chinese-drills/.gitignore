@@ -1,0 +1,21 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+.restart
+update-log.txt
+# written by the Dock app when it starts, so a failure can be read back
+launch-log.txt
+
+# local database — your practice history lives here, never committed
+data/drills.db
+data/drills.db-journal
+data/drills.db-wal
+data/drills.db-shm
+
+# cached pronunciation audio
+data/audio/
+
+# written by the updater when it cannot merge your corrections for you
+data/lessons.incoming.json

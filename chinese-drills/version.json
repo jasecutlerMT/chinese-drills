@@ -1,0 +1,6 @@
+{
+  "version": 12,
+  "label": "The Dock app now uses the same Node and PATH as the Terminal launcher, and repairs its database component by itself if they ever disagree",
+  "repo": "jasecutlerMT/chinese-drills",
+  "branch": "main"
+}
